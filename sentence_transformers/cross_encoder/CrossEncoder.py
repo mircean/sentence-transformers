@@ -17,6 +17,7 @@ from ..evaluation import SentenceEvaluator
 logger = logging.getLogger(__name__)
 
 
+
 class CrossEncoder():
     def __init__(self, model_name:str, num_labels:int = None, max_length:int = None, device:str = None, tokenizer_args:Dict = {},
                   automodel_args:Dict = {}, default_activation_function = None):
@@ -47,7 +48,7 @@ class CrossEncoder():
         if num_labels is not None:
             self.config.num_labels = num_labels
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, config=self.config, **automodel_args)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, config=self.config, ignore_mismatched_sizes=True, **automodel_args)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, **tokenizer_args)
         self.max_length = max_length
 
@@ -117,6 +118,7 @@ class CrossEncoder():
             max_grad_norm: float = 1,
             use_amp: bool = False,
             callback: Callable[[float, int, int], None] = None,
+            train_calback: object = None,
             show_progress_bar: bool = True
             ):
         """
@@ -176,14 +178,17 @@ class CrossEncoder():
         if loss_fct is None:
             loss_fct = nn.BCEWithLogitsLoss() if self.config.num_labels == 1 else nn.CrossEntropyLoss()
 
-
+        display = ""
+        global_step = 0
         skip_scheduler = False
         for epoch in trange(epochs, desc="Epoch", disable=not show_progress_bar):
             training_steps = 0
             self.model.zero_grad()
             self.model.train()
 
-            for features, labels in tqdm(train_dataloader, desc="Iteration", smoothing=0.05, disable=not show_progress_bar):
+            pbar = tqdm(train_dataloader, desc="Iteration", smoothing=0.05, disable=not show_progress_bar)
+            for features, labels in pbar:
+                
                 if use_amp:
                     with autocast():
                         model_predictions = self.model(**features, return_dict=True)
@@ -191,6 +196,8 @@ class CrossEncoder():
                         if self.config.num_labels == 1:
                             logits = logits.view(-1)
                         loss_value = loss_fct(logits, labels)
+
+                    display = train_calback(logits, labels, loss_value, optimizer.state_dict()["param_groups"][0]["lr"], global_step)
 
                     scale_before_step = scaler.get_scale()
                     scaler.scale(loss_value).backward()
@@ -206,6 +213,9 @@ class CrossEncoder():
                     if self.config.num_labels == 1:
                         logits = logits.view(-1)
                     loss_value = loss_fct(logits, labels)
+
+                    display = train_calback(logits, labels, loss_value, optimizer.state_dict()["param_groups"][0]["lr"], global_step)
+
                     loss_value.backward()
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
                     optimizer.step()
@@ -216,15 +226,17 @@ class CrossEncoder():
                     scheduler.step()
 
                 training_steps += 1
+                global_step += 1
+                pbar.set_description(display)
 
                 if evaluator is not None and evaluation_steps > 0 and training_steps % evaluation_steps == 0:
-                    self._eval_during_training(evaluator, output_path, save_best_model, epoch, training_steps, callback)
+                    self._eval_during_training(evaluator, output_path, save_best_model, epoch, global_step, callback)
 
                     self.model.zero_grad()
                     self.model.train()
 
             if evaluator is not None:
-                self._eval_during_training(evaluator, output_path, save_best_model, epoch, -1, callback)
+                self._eval_during_training(evaluator, output_path, save_best_model, epoch, global_step, callback)
 
 
 

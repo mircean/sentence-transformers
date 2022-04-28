@@ -588,6 +588,7 @@ class SentenceTransformer(nn.Sequential):
             max_grad_norm: float = 1,
             use_amp: bool = False,
             callback: Callable[[float, int, int], None] = None,
+            train_callback: object = None,
             show_progress_bar: bool = True,
             checkpoint_path: str = None,
             checkpoint_save_steps: int = 500,
@@ -675,7 +676,7 @@ class SentenceTransformer(nn.Sequential):
             optimizers.append(optimizer)
             schedulers.append(scheduler_obj)
 
-
+        display = ""
         global_step = 0
         data_iterators = [iter(dataloader) for dataloader in dataloaders]
 
@@ -689,7 +690,8 @@ class SentenceTransformer(nn.Sequential):
                 loss_model.zero_grad()
                 loss_model.train()
 
-            for _ in trange(steps_per_epoch, desc="Iteration", smoothing=0.05, disable=not show_progress_bar):
+            pbar = trange(steps_per_epoch, desc="Iteration", smoothing=0.05, disable=not show_progress_bar)
+            for _ in pbar:
                 for train_idx in range(num_train_objectives):
                     loss_model = loss_models[train_idx]
                     optimizer = optimizers[train_idx]
@@ -711,6 +713,10 @@ class SentenceTransformer(nn.Sequential):
                         with autocast():
                             loss_value = loss_model(features, labels)
 
+                        if type(loss_value) == tuple:
+                            loss_value, outputs = loss_value
+                            display = train_callback(outputs, labels, loss_value, optimizer.state_dict()["param_groups"][0]["lr"], global_step)
+
                         scale_before_step = scaler.get_scale()
                         scaler.scale(loss_value).backward()
                         scaler.unscale_(optimizer)
@@ -721,6 +727,11 @@ class SentenceTransformer(nn.Sequential):
                         skip_scheduler = scaler.get_scale() != scale_before_step
                     else:
                         loss_value = loss_model(features, labels)
+
+                        if type(loss_value) == tuple:
+                            loss_value, outputs = loss_value
+                            display = train_callback(outputs, labels, loss_value, optimizer.state_dict()["param_groups"][0]["lr"], global_step)
+
                         loss_value.backward()
                         torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
                         optimizer.step()
@@ -732,9 +743,10 @@ class SentenceTransformer(nn.Sequential):
 
                 training_steps += 1
                 global_step += 1
+                pbar.set_description(display)
 
                 if evaluation_steps > 0 and training_steps % evaluation_steps == 0:
-                    self._eval_during_training(evaluator, output_path, save_best_model, epoch, training_steps, callback)
+                    self._eval_during_training(evaluator, output_path, save_best_model, epoch, global_step, callback)
 
                     for loss_model in loss_models:
                         loss_model.zero_grad()
@@ -744,7 +756,7 @@ class SentenceTransformer(nn.Sequential):
                     self._save_checkpoint(checkpoint_path, checkpoint_save_total_limit, global_step)
 
 
-            self._eval_during_training(evaluator, output_path, save_best_model, epoch, -1, callback)
+            self._eval_during_training(evaluator, output_path, save_best_model, epoch, global_step, callback)
 
         if evaluator is None and output_path is not None:   #No evaluator, but output path: save final model version
             self.save(output_path)
