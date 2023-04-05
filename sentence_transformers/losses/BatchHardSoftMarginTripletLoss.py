@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 from typing import Union, Tuple, List, Iterable, Dict
 from .BatchHardTripletLoss import BatchHardTripletLoss, BatchHardTripletLossDistanceFunction
-from sentence_transformers.SentenceTransformer import SentenceTransformer
+from ..SentenceTransformer import SentenceTransformer
 
 class BatchHardSoftMarginTripletLoss(BatchHardTripletLoss):
     """

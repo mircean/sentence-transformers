@@ -1,6 +1,6 @@
 from . import SentenceEvaluator
 import logging
-from sentence_transformers.util import paraphrase_mining
+from ..util import paraphrase_mining
 import os
 import csv
 
